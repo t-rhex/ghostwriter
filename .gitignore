@@ -1,0 +1,33 @@
+# Swift build artifacts
+.build/
+*.xcodeproj/
+xcuserdata/
+DerivedData/
+*.swp
+*.swo
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+*.egg
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.idea/
+.vscode/
+*.xcworkspace/
+
+# Logs
+*.log
+
+# MLX model cache (downloaded at runtime)
+models/

@@ -33,7 +33,7 @@ fi
 # 3. Remove .app bundle
 echo "[3/5] Removing $APP_NAME..."
 if [ -d "$APP_INSTALL_DIR/$APP_NAME" ]; then
-    rm -rf "$APP_INSTALL_DIR/$APP_NAME"
+    rm -rf "${APP_INSTALL_DIR:?}/${APP_NAME:?}"
     echo "  → $APP_NAME removed from $APP_INSTALL_DIR"
 else
     echo "  → $APP_NAME not found (skipped)"

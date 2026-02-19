@@ -47,6 +47,31 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 def post_process(text: str) -> str:
     """Apply deterministic grammar rules that small models often miss."""
+    # --- Subject-verb agreement fixes ---
+    # "is you" → "are you"
+    text = re.sub(r'\bIs you\b', 'Are you', text)
+    text = re.sub(r'\bis you\b', 'are you', text)
+    # "is we" → "are we"
+    text = re.sub(r'\bIs we\b', 'Are we', text)
+    text = re.sub(r'\bis we\b', 'are we', text)
+    # "is they" → "are they"
+    text = re.sub(r'\bIs they\b', 'Are they', text)
+    text = re.sub(r'\bis they\b', 'are they', text)
+    # "was you" → "were you"
+    text = re.sub(r'\bwas you\b', 'were you', text)
+    text = re.sub(r'\bWas you\b', 'Were you', text)
+    # "was we" → "were we"
+    text = re.sub(r'\bwas we\b', 'were we', text)
+    text = re.sub(r'\bWas we\b', 'Were we', text)
+    # "was they" → "were they"
+    text = re.sub(r'\bwas they\b', 'were they', text)
+    text = re.sub(r'\bWas they\b', 'Were they', text)
+    # "he/she/it don't" → "he/she/it doesn't"
+    text = re.sub(r'\b(he|she|it) don\'t\b', r"\1 doesn't", text, flags=re.IGNORECASE)
+    # "I/you/we/they doesn't" → "I/you/we/they don't"
+    text = re.sub(r'\b(I|you|we|they) doesn\'t\b', r"\1 don't", text, flags=re.IGNORECASE)
+
+    # --- Capitalization ---
     # Capitalize after sentence-ending punctuation (. ! ?)
     text = re.sub(
         r'([.!?])\s+([a-z])',
@@ -109,6 +134,39 @@ def generate(messages: list[dict], max_tokens: int = 512) -> str:
     return response.strip()
 
 
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentences, preserving the delimiters."""
+    parts = re.split(r'(?<=[.!?])\s+', text.strip())
+    return [p for p in parts if p.strip()]
+
+
+def correct_with_fallback(text: str, tone_modifier: str) -> str:
+    """Correct text, falling back to per-sentence correction if the model drops content."""
+    # Try full-text correction first
+    messages = build_correction_messages(text, tone_modifier=tone_modifier)
+    result = generate(messages, max_tokens=len(text) * 2)
+    result = post_process(result)
+
+    # Validate: if model dropped sentences, fall back to per-sentence correction
+    input_sentences = _split_sentences(text)
+    output_sentences = _split_sentences(result)
+
+    if len(input_sentences) > 1 and len(output_sentences) < len(input_sentences):
+        logger.warning(
+            f"Model dropped sentences ({len(input_sentences)} → {len(output_sentences)}). "
+            "Falling back to per-sentence correction."
+        )
+        corrected_parts = []
+        for sentence in input_sentences:
+            msgs = build_correction_messages(sentence, tone_modifier=tone_modifier)
+            corrected = generate(msgs, max_tokens=len(sentence) * 2)
+            corrected = post_process(corrected)
+            corrected_parts.append(corrected)
+        result = " ".join(corrected_parts)
+
+    return result
+
+
 @app.get("/health")
 def health():
     return {"status": "ok", "model": MODEL_NAME, "model_loaded": _model is not None}
@@ -130,11 +188,7 @@ def correct(req: CorrectionRequest):
     logger.info(f"Correction request: {len(req.text)} chars")
     start = time.monotonic()
 
-    messages = build_correction_messages(req.text, tone_modifier=req.tone)
-    result = generate(messages, max_tokens=len(req.text) * 2)
-
-    # Apply rule-based post-processing to catch what the model misses
-    result = post_process(result)
+    result = correct_with_fallback(req.text, tone_modifier=req.tone)
 
     elapsed = (time.monotonic() - start) * 1000
     logger.info(f"Correction done in {elapsed:.0f}ms")

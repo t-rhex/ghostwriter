@@ -1,5 +1,9 @@
 import Foundation
 
+// Ensure stdout flushes immediately (needed when not attached to a terminal)
+setbuf(stdout, nil)
+setbuf(stderr, nil)
+
 print("[Ghostwriter] Ghostwriter v1.0.0")
 print("[Ghostwriter] Checking permissions...")
 

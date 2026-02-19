@@ -179,10 +179,28 @@ final class GhostwriterApp {
         // Skip if no change
         guard corrected != text else { return }
 
-        // Re-read to check user hasn't typed during processing
-        if let currentField = textFieldReader.readFocusedTextField(), currentField.text != fieldInfo.text {
-            print("[Ghostwriter] Text changed during processing — skipping.")
-            return
+        // Re-read to check user hasn't typed during processing.
+        // If the text changed, re-apply the correction to the *new* text
+        // only if the new text starts with or is similar to the original.
+        if let currentField = textFieldReader.readFocusedTextField() {
+            let currentText = currentField.text
+            if currentText != fieldInfo.text {
+                // User typed more — check if it's just appended text
+                if currentText.hasPrefix(text) && currentText.count > text.count {
+                    // User appended text after what we corrected.
+                    // Apply correction to the prefix and keep the appended part.
+                    let appended = String(currentText.dropFirst(text.count))
+                    let newFull = corrected + appended
+                    let strategy = textReplacer.replaceFullText(in: currentField.element, with: newFull)
+                    if let strategy = strategy {
+                        undoManager.recordCorrection(original: currentText, corrected: newFull)
+                        print("[Ghostwriter] Corrected (with appended text) via \(strategy): \"\(text.prefix(30))\" → \"\(corrected.prefix(30))\"")
+                    }
+                } else {
+                    print("[Ghostwriter] Text changed significantly during processing — skipping.")
+                }
+                return
+            }
         }
 
         // Apply correction

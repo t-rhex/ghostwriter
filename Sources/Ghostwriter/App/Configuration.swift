@@ -2,7 +2,7 @@ import Foundation
 
 enum Configuration {
     // MARK: - Debouncing
-    static let shortPauseInterval: TimeInterval = 0.4   // 400ms → trigger correction
+    static let shortPauseInterval: TimeInterval = 1.5   // 1.5s → trigger correction (tuned for 8B model latency)
     static let longPauseInterval: TimeInterval = 2.0     // 2s → trigger elaboration
 
     // MARK: - LLM Server

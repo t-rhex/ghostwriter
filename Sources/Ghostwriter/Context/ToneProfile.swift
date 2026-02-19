@@ -46,6 +46,7 @@ enum ToneProfile {
         "dev.warp.Warp-Stable": .technical,
         "com.googlecode.iterm2": .technical,
         "net.kovidgoyal.kitty": .technical,
+        "com.mitchellh.ghostty": .technical,
     ]
 
     /// Get the tone for a given app bundle identifier.

@@ -38,7 +38,7 @@ bash Scripts/bundle.sh
 # 3. Install the .app bundle
 echo "[3/8] Installing $APP_NAME to $APP_INSTALL_DIR..."
 if [ -d "$APP_INSTALL_DIR/$APP_NAME" ]; then
-    rm -rf "$APP_INSTALL_DIR/$APP_NAME"
+    rm -rf "${APP_INSTALL_DIR:?}/${APP_NAME:?}"
 fi
 cp -R ".build/$APP_NAME" "$APP_INSTALL_DIR/$APP_NAME"
 echo "  → Installed to $APP_INSTALL_DIR/$APP_NAME"

@@ -10,7 +10,9 @@ from pydantic import BaseModel, Field
 
 from prompts import build_elaboration_messages
 
-logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s"
+)
 logger = logging.getLogger("ghostwriter")
 
 # ---------------------------------------------------------------------------
@@ -157,32 +159,34 @@ def post_process(text: str) -> str:
     """Apply deterministic grammar rules as a safety net."""
     # --- Subject-verb agreement fixes ---
     # "is you" → "are you"
-    text = re.sub(r'\bIs you\b', 'Are you', text)
-    text = re.sub(r'\bis you\b', 'are you', text)
+    text = re.sub(r"\bIs you\b", "Are you", text)
+    text = re.sub(r"\bis you\b", "are you", text)
     # "is we" → "are we"
-    text = re.sub(r'\bIs we\b', 'Are we', text)
-    text = re.sub(r'\bis we\b', 'are we', text)
+    text = re.sub(r"\bIs we\b", "Are we", text)
+    text = re.sub(r"\bis we\b", "are we", text)
     # "is they" → "are they"
-    text = re.sub(r'\bIs they\b', 'Are they', text)
-    text = re.sub(r'\bis they\b', 'are they', text)
+    text = re.sub(r"\bIs they\b", "Are they", text)
+    text = re.sub(r"\bis they\b", "are they", text)
     # "was you" → "were you"
-    text = re.sub(r'\bwas you\b', 'were you', text)
-    text = re.sub(r'\bWas you\b', 'Were you', text)
+    text = re.sub(r"\bwas you\b", "were you", text)
+    text = re.sub(r"\bWas you\b", "Were you", text)
     # "was we" → "were we"
-    text = re.sub(r'\bwas we\b', 'were we', text)
-    text = re.sub(r'\bWas we\b', 'Were we', text)
+    text = re.sub(r"\bwas we\b", "were we", text)
+    text = re.sub(r"\bWas we\b", "Were we", text)
     # "was they" → "were they"
-    text = re.sub(r'\bwas they\b', 'were they', text)
-    text = re.sub(r'\bWas they\b', 'Were they', text)
+    text = re.sub(r"\bwas they\b", "were they", text)
+    text = re.sub(r"\bWas they\b", "Were they", text)
     # "he/she/it don't" → "he/she/it doesn't"
-    text = re.sub(r'\b(he|she|it) don\'t\b', r"\1 doesn't", text, flags=re.IGNORECASE)
+    text = re.sub(r"\b(he|she|it) don\'t\b", r"\1 doesn't", text, flags=re.IGNORECASE)
     # "I/you/we/they doesn't" → "I/you/we/they don't"
-    text = re.sub(r'\b(I|you|we|they) doesn\'t\b', r"\1 don't", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"\b(I|you|we|they) doesn\'t\b", r"\1 don't", text, flags=re.IGNORECASE
+    )
 
     # --- Capitalization ---
     # Capitalize after sentence-ending punctuation (. ! ?)
     text = re.sub(
-        r'([.!?])\s+([a-z])',
+        r"([.!?])\s+([a-z])",
         lambda m: m.group(1) + " " + m.group(2).upper(),
         text,
     )
@@ -194,10 +198,12 @@ def post_process(text: str) -> str:
     # Standalone "i" → "I"
     text = re.sub(r"(?<![a-zA-Z])i(?![a-zA-Z'])", "I", text)
     # "i'm" → "I'm", "i'll" → "I'll", "i've" → "I've", "i'd" → "I'd"
-    text = re.sub(r"(?<![a-zA-Z])i('m|'ll|'ve|'d|'ve)\b", lambda m: "I" + m.group(1), text)
+    text = re.sub(
+        r"(?<![a-zA-Z])i('m|'ll|'ve|'d|'ve)\b", lambda m: "I" + m.group(1), text
+    )
 
     # Remove space before punctuation (e.g., "it ?" → "it?")
-    text = re.sub(r'\s+([.!?,;:])', r'\1', text)
+    text = re.sub(r"\s+([.!?,;:])", r"\1", text)
 
     return text
 
@@ -229,7 +235,9 @@ def generate(messages: list[dict], max_tokens: int = 512) -> str:
 
     model, tokenizer = get_model()
 
-    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    prompt = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
     response = mlx_generate(
         model,
         tokenizer,

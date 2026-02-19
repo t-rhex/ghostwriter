@@ -14,7 +14,10 @@ ELABORATION_FEW_SHOT = [
     {"role": "user", "content": "thx for the help really"},
     {"role": "assistant", "content": " appreciate it!"},
     {"role": "user", "content": "I wanted to let you know that"},
-    {"role": "assistant", "content": " the project is on track and we should be ready for the deadline."},
+    {
+        "role": "assistant",
+        "content": " the project is on track and we should be ready for the deadline.",
+    },
 ]
 
 

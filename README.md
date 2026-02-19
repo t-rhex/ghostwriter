@@ -5,7 +5,7 @@ A macOS background service that silently corrects grammar and suggests text comp
 ## How It Works
 
 1. **You type** — Ghostwriter captures keystrokes via a listen-only event tap (never blocks input)
-2. **You pause for 400ms** — It reads the focused text field, sends it to a local LLM, and applies corrections
+2. **You pause for 400ms** — It reads the focused text field, corrects grammar via LanguageTool, and applies fixes
 3. **You pause for 2s on short text** — It suggests a completion, shown as highlighted text
 4. **Press Tab** to accept a suggestion, or just keep typing to dismiss it
 
@@ -18,16 +18,16 @@ Everything runs locally. No data leaves your machine.
 │   Swift Background Agent │ ◄──────────────────────────► │  Python MLX Server   │
 │                          │                               │                      │
 │  • CGEventTap (listen)   │                               │  • FastAPI + uvicorn │
-│  • AXUIElement read/write│                               │  • mlx-lm inference  │
-│  • Debounce + safety     │                               │  • Few-shot prompts  │
+│  • AXUIElement read/write│                               │  • LanguageTool (correction) │
+│  • Debounce + safety     │                               │  • mlx-lm (elaboration)      │
 │  • Tone detection        │                               │  • Post-processing   │
 └─────────────────────────┘                               └──────────────────────┘
 ```
 
 ## Features
 
-- **Grammar correction** — fixes spelling, punctuation, capitalization, wrong word usage
-- **Text completion** — suggests continuations for short text fragments (ghost text)
+- **Grammar correction** — deterministic, rule-based correction via [LanguageTool](https://languagetool.org/) (6000+ rules, ~20-100ms)
+- **Text completion** — suggests continuations for short text fragments via MLX LLM (ghost text)
 - **Tone-aware** — adapts behavior per app:
   | App | Tone | Behavior |
   |-----|------|----------|
@@ -36,14 +36,15 @@ Everything runs locally. No data leaves your machine.
   | Terminal, Xcode, VS Code | Technical | Skipped (no corrections) |
   | Everything else | Neutral | Standard English |
 - **Safe** — skips password fields, rejects rewrites >30% different, prevents correction loops
-- **Local** — runs Llama 3.2 3B (4-bit) via Apple MLX on your Mac's GPU
+- **Local** — LanguageTool runs via Java, Llama 3.2 3B (4-bit) runs via Apple MLX — nothing leaves your machine
 
 ## Requirements
 
 - macOS 13+ (Ventura or later)
 - Apple Silicon Mac (M1/M2/M3/M4)
 - Python 3.9+
-- ~4 GB RAM for the 3B model
+- Java 8+ (e.g., `brew install openjdk`) — required by LanguageTool
+- ~4 GB RAM for the 3B model + ~300-500 MB for LanguageTool's Java server
 
 ## Quick Start
 
@@ -76,7 +77,7 @@ On first launch, grant both permissions in **System Settings > Privacy & Securit
 bash Scripts/install.sh
 ```
 
-This builds, installs to `/Applications`, sets up the Python venv, downloads the model, and installs a LaunchAgent.
+This builds, installs to `/Applications`, sets up the Python venv, validates Java, downloads LanguageTool (~200 MB) and the MLX model (~4 GB), and installs a LaunchAgent.
 
 ## Uninstall
 
@@ -115,8 +116,8 @@ ghostwriter/
 │       └── MLXServerManager.swift         # Python server lifecycle
 ├── Server/
 │   ├── requirements.txt
-│   ├── ghostwriter_server.py              # FastAPI: /v1/correct, /v1/elaborate
-│   └── prompts.py                         # System prompts + few-shot examples
+│   ├── ghostwriter_server.py              # FastAPI: /v1/correct (LanguageTool), /v1/elaborate (MLX)
+│   └── prompts.py                         # Elaboration prompts + few-shot examples
 ├── Scripts/
 │   ├── bundle.sh                          # Build .app bundle
 │   ├── install.sh                         # Full install + LaunchAgent

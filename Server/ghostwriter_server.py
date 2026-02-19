@@ -8,13 +8,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-from prompts import build_correction_messages, build_elaboration_messages
+from prompts import build_elaboration_messages
 
 logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 logger = logging.getLogger("ghostwriter")
 
 # ---------------------------------------------------------------------------
-# Model loading
+# Model loading (MLX — used for elaboration only)
 # ---------------------------------------------------------------------------
 _model = None
 _tokenizer = None
@@ -32,21 +32,115 @@ def get_model():
     return _model, _tokenizer
 
 
+# ---------------------------------------------------------------------------
+# LanguageTool loading (used for correction)
+# ---------------------------------------------------------------------------
+_language_tool = None
+
+
+def get_language_tool():
+    global _language_tool
+    if _language_tool is None:
+        logger.info("Loading LanguageTool...")
+        import language_tool_python
+
+        _language_tool = language_tool_python.LanguageTool("en-US")
+        logger.info("LanguageTool loaded successfully.")
+    return _language_tool
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the model eagerly at startup so first request is fast."""
-    logger.info("Server starting — loading model...")
+    """Load the model and LanguageTool eagerly at startup so first request is fast."""
+    logger.info("Server starting — loading model and LanguageTool...")
     get_model()
-    logger.info("Model ready. Server accepting requests.")
+    get_language_tool()
+    logger.info("Model and LanguageTool ready. Server accepting requests.")
     yield
     logger.info("Server shutting down.")
+    global _language_tool
+    if _language_tool is not None:
+        _language_tool.close()
+        _language_tool = None
+        logger.info("LanguageTool closed.")
 
 
 # ---------------------------------------------------------------------------
-# Post-processing: rule-based fixes the LLM might miss
+# Tone-aware rule filtering for LanguageTool
+# ---------------------------------------------------------------------------
+TONE_DISABLED_CATEGORIES: dict[str, set[str]] = {
+    "casual": {
+        "STYLE",
+        "REDUNDANCY",
+        "COLLOQUIALISMS",
+        "TYPOGRAPHY",
+        "COMPOUNDING",
+        "REPETITIONS_STYLE",
+    },
+    "professional": set(),  # max strictness
+    "neutral": {"COLLOQUIALISMS", "REPETITIONS_STYLE"},
+    "technical": set(),
+}
+
+TONE_DISABLED_RULES: dict[str, set[str]] = {
+    "casual": {
+        "UPPERCASE_SENTENCE_START",
+        "EN_UNPAIRED_BRACKETS",
+        "COMMA_PARENTHESIS_WHITESPACE",
+        "DASH_RULE",
+        "SENTENCE_WHITESPACE",
+    },
+    "professional": set(),
+    "neutral": {"UPPERCASE_SENTENCE_START"},
+    "technical": set(),
+}
+
+
+def _classify_tone(tone_modifier: str) -> str:
+    """Classify the Swift tone string into a tone key for rule filtering."""
+    if not tone_modifier:
+        return "neutral"
+    lower = tone_modifier.lower()
+    if "casual" in lower or "friendly" in lower:
+        return "casual"
+    if "professional" in lower or "polished" in lower or "formal" in lower:
+        return "professional"
+    if "technical" in lower:
+        return "technical"
+    return "neutral"
+
+
+# ---------------------------------------------------------------------------
+# LanguageTool correction
+# ---------------------------------------------------------------------------
+def correct_with_languagetool(text: str, tone_modifier: str) -> str:
+    """Correct text using LanguageTool with tone-aware rule filtering."""
+    tool = get_language_tool()
+    tone = _classify_tone(tone_modifier)
+    disabled_categories = TONE_DISABLED_CATEGORIES.get(tone, set())
+    disabled_rules = TONE_DISABLED_RULES.get(tone, set())
+
+    matches = tool.check(text)
+
+    # Filter matches by tone
+    filtered = [
+        m
+        for m in matches
+        if m.rule_id not in disabled_rules
+        and m.category not in disabled_categories
+    ]
+
+    import language_tool_python
+
+    corrected = language_tool_python.utils.correct(text, filtered)
+    return corrected
+
+
+# ---------------------------------------------------------------------------
+# Post-processing: rule-based fixes LanguageTool might miss
 # ---------------------------------------------------------------------------
 def post_process(text: str) -> str:
-    """Apply deterministic grammar rules that small models often miss."""
+    """Apply deterministic grammar rules as a safety net."""
     # --- Subject-verb agreement fixes ---
     # "is you" → "are you"
     text = re.sub(r'\bIs you\b', 'Are you', text)
@@ -87,6 +181,9 @@ def post_process(text: str) -> str:
     text = re.sub(r"(?<![a-zA-Z])i(?![a-zA-Z'])", "I", text)
     # "i'm" → "I'm", "i'll" → "I'll", "i've" → "I've", "i'd" → "I'd"
     text = re.sub(r"(?<![a-zA-Z])i('m|'ll|'ve|'d|'ve)\b", lambda m: "I" + m.group(1), text)
+
+    # Remove space before punctuation (e.g., "it ?" → "it?")
+    text = re.sub(r'\s+([.!?,;:])', r'\1', text)
 
     # Add period at end if missing punctuation
     stripped = text.rstrip()
@@ -134,50 +231,24 @@ def generate(messages: list[dict], max_tokens: int = 512) -> str:
     return response.strip()
 
 
-def _split_sentences(text: str) -> list[str]:
-    """Split text into sentences, preserving the delimiters."""
-    parts = re.split(r'(?<=[.!?])\s+', text.strip())
-    return [p for p in parts if p.strip()]
-
-
-def correct_with_fallback(text: str, tone_modifier: str) -> str:
-    """Correct text, falling back to per-sentence correction if the model drops content."""
-    # Try full-text correction first
-    messages = build_correction_messages(text, tone_modifier=tone_modifier)
-    result = generate(messages, max_tokens=len(text) * 2)
-    result = post_process(result)
-
-    # Validate: if model dropped sentences, fall back to per-sentence correction
-    input_sentences = _split_sentences(text)
-    output_sentences = _split_sentences(result)
-
-    if len(input_sentences) > 1 and len(output_sentences) < len(input_sentences):
-        logger.warning(
-            f"Model dropped sentences ({len(input_sentences)} → {len(output_sentences)}). "
-            "Falling back to per-sentence correction."
-        )
-        corrected_parts = []
-        for sentence in input_sentences:
-            msgs = build_correction_messages(sentence, tone_modifier=tone_modifier)
-            corrected = generate(msgs, max_tokens=len(sentence) * 2)
-            corrected = post_process(corrected)
-            corrected_parts.append(corrected)
-        result = " ".join(corrected_parts)
-
-    return result
-
-
 @app.get("/health")
 def health():
-    return {"status": "ok", "model": MODEL_NAME, "model_loaded": _model is not None}
+    return {
+        "status": "ok",
+        "model": MODEL_NAME,
+        "model_loaded": _model is not None,
+        "languagetool_loaded": _language_tool is not None,
+    }
 
 
 @app.get("/ready")
 def ready():
-    """Returns 200 only when the model is loaded and ready for inference."""
+    """Returns 200 only when the model and LanguageTool are loaded and ready."""
     if _model is None:
         raise HTTPException(status_code=503, detail="Model not loaded yet")
-    return {"status": "ready", "model": MODEL_NAME}
+    if _language_tool is None:
+        raise HTTPException(status_code=503, detail="LanguageTool not loaded yet")
+    return {"status": "ready", "model": MODEL_NAME, "languagetool": True}
 
 
 @app.post("/v1/correct", response_model=LLMResponse)
@@ -188,7 +259,8 @@ def correct(req: CorrectionRequest):
     logger.info(f"Correction request: {len(req.text)} chars")
     start = time.monotonic()
 
-    result = correct_with_fallback(req.text, tone_modifier=req.tone)
+    result = correct_with_languagetool(req.text, tone_modifier=req.tone)
+    result = post_process(result)
 
     elapsed = (time.monotonic() - start) * 1000
     logger.info(f"Correction done in {elapsed:.0f}ms")

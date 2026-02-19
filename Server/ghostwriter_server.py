@@ -115,25 +115,39 @@ def _classify_tone(tone_modifier: str) -> str:
 # ---------------------------------------------------------------------------
 def correct_with_languagetool(text: str, tone_modifier: str) -> str:
     """Correct text using LanguageTool with tone-aware rule filtering."""
-    tool = get_language_tool()
+    global _language_tool
     tone = _classify_tone(tone_modifier)
     disabled_categories = TONE_DISABLED_CATEGORIES.get(tone, set())
     disabled_rules = TONE_DISABLED_RULES.get(tone, set())
 
-    matches = tool.check(text)
-
-    # Filter matches by tone
-    filtered = [
-        m
-        for m in matches
-        if m.rule_id not in disabled_rules
-        and m.category not in disabled_categories
-    ]
-
     import language_tool_python
 
-    corrected = language_tool_python.utils.correct(text, filtered)
-    return corrected
+    for attempt in range(2):
+        try:
+            tool = get_language_tool()
+            matches = tool.check(text)
+
+            # Filter matches by tone
+            filtered = [
+                m
+                for m in matches
+                if m.rule_id not in disabled_rules
+                and m.category not in disabled_categories
+            ]
+
+            corrected = language_tool_python.utils.correct(text, filtered)
+            return corrected
+        except Exception as exc:
+            logger.error(f"LanguageTool check failed (attempt {attempt + 1}/2): {exc}")
+            # Discard the dead reference so get_language_tool() will reinit
+            _language_tool = None
+            if attempt == 0:
+                logger.info("Reinitializing LanguageTool and retrying...")
+                continue  # retry once after reinit
+            raise HTTPException(
+                status_code=503,
+                detail="LanguageTool is temporarily unavailable. Please try again shortly.",
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -184,11 +198,6 @@ def post_process(text: str) -> str:
 
     # Remove space before punctuation (e.g., "it ?" → "it?")
     text = re.sub(r'\s+([.!?,;:])', r'\1', text)
-
-    # Add period at end if missing punctuation
-    stripped = text.rstrip()
-    if stripped and stripped[-1] not in ".!?,:;…":
-        text = stripped + "."
 
     return text
 
@@ -288,4 +297,4 @@ def elaborate(req: ElaborationRequest):
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(app, host="127.0.0.1", port=9274, log_level="info")
+    uvicorn.run(app, host="127.0.0.1", port=9274, log_level="info", workers=2)

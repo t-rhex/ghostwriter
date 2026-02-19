@@ -23,8 +23,17 @@ enum Configuration {
     static let serverStartupTimeout: TimeInterval = 30.0   // For uvicorn process to start
     static let serverReadyTimeout: TimeInterval = 180.0    // For model download + load (up to 3 min)
     static let serverHealthCheckInterval: TimeInterval = 5.0
-    static let serverRestartDelay: TimeInterval = 2.0
-    static let maxServerRestartAttempts = 3
+    static let serverRestartDelay: TimeInterval = 2.0       // Base delay (not used for backoff)
+    static let maxServerRestartAttempts = 10                 // Cap before giving up entirely
+
+    // Exponential backoff delays between restart attempts (seconds)
+    static let serverBackoffDelays: [TimeInterval] = [5, 15, 30, 60]
+
+    // Periodic health check interval (seconds) — detects silent server death
+    static let serverPeriodicHealthCheckInterval: TimeInterval = 30.0
+
+    // How long the server must stay up before restart counter resets (seconds)
+    static let serverStableThreshold: TimeInterval = 60.0
 
     // MARK: - Python Virtual Environment
     static let venvDirectory = ".venv"

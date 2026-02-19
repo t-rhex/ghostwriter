@@ -17,7 +17,7 @@ RESOURCES="$CONTENTS/Resources"
 echo "=== Building Ghostwriter.app ==="
 
 # 1. Build release binary
-echo "[1/2] Compiling..."
+echo "[1/3] Compiling..."
 cd "$PROJECT_DIR"
 swift build -c release 2>&1
 

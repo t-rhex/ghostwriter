@@ -5,7 +5,7 @@ A macOS background service that silently corrects grammar and suggests text comp
 ## How It Works
 
 1. **You type** — Ghostwriter captures keystrokes via a listen-only event tap (never blocks input)
-2. **You pause for 400ms** — It reads the focused text field, corrects grammar via LanguageTool, and applies fixes
+2. **You pause for ~1 second** — It reads the focused text field, corrects grammar via LanguageTool, and applies fixes
 3. **You pause for 2s on short text** — It suggests a completion, shown as highlighted text
 4. **Press Tab** to accept a suggestion, or just keep typing to dismiss it
 
@@ -99,7 +99,7 @@ ghostwriter/
 │   ├── Input/
 │   │   ├── KeystrokeMonitor.swift         # CGEventTap (listen-only)
 │   │   ├── KeystrokeBuffer.swift          # Character accumulator
-│   │   └── TypingDebouncer.swift          # 400ms / 2s pause detection
+│   │   └── TypingDebouncer.swift          # ~1s / 2s pause detection
 │   ├── Context/
 │   │   ├── AppDetector.swift              # Frontmost app detection
 │   │   ├── ToneProfile.swift              # Per-app tone mapping
@@ -137,7 +137,7 @@ Edit `Sources/Ghostwriter/App/Configuration.swift`:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `shortPauseInterval` | 0.4s | Pause before correction triggers |
+| `shortPauseInterval` | 1.0s | Pause before correction triggers |
 | `longPauseInterval` | 2.0s | Pause before elaboration triggers |
 | `maxEditDistanceRatio` | 0.30 | Reject corrections >30% different |
 | `maxTextLength` | 2000 | Max chars sent to LLM |

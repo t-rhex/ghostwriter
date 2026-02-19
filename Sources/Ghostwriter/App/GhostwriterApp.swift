@@ -19,9 +19,24 @@ final class GhostwriterApp {
 
     // State
     private let processingQueue = DispatchQueue(label: "com.ghostwriter.processing")
-    private var isProcessing = false
+    private var _isProcessing = false
     private var statusBar: StatusBarController?
-    private var isPaused = false
+    private var _isPaused = false
+
+    // Thread-safety lock for shared state accessed across queues
+    private let stateLock = NSLock()
+
+    /// Thread-safe accessor for `isProcessing`.
+    private var isProcessing: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isProcessing }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _isProcessing = newValue }
+    }
+
+    /// Thread-safe accessor for `isPaused`.
+    private var isPaused: Bool {
+        get { stateLock.lock(); defer { stateLock.unlock() }; return _isPaused }
+        set { stateLock.lock(); defer { stateLock.unlock() }; _isPaused = newValue }
+    }
 
     init() {
         self.debouncer = TypingDebouncer()

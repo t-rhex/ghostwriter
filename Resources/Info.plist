@@ -14,8 +14,6 @@
     <string>1.0.0</string>
     <key>LSUIElement</key>
     <true/>
-    <key>LSBackgroundOnly</key>
-    <true/>
     <key>NSAppleEventsUsageDescription</key>
     <string>Ghostwriter needs to interact with other applications to correct and enhance text.</string>
 </dict>

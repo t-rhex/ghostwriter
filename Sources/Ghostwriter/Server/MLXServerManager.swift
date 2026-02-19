@@ -8,6 +8,8 @@ final class MLXServerManager {
     private var isRunning = false
     private let llmClient = LLMClient()
     private var serverDir: String?
+    private var lastSuccessfulLaunchTime: Date?
+    private var healthCheckTimer: DispatchSourceTimer?
 
     /// Start the Python MLX server.
     func start() {
@@ -21,12 +23,14 @@ final class MLXServerManager {
 
         launchServer(serverDir: serverDir)
         waitForServerReady()
+        startHealthCheckTimer()
         observeSleepWake()
     }
 
     /// Stop the Python MLX server.
     func stop() {
         isRunning = false
+        stopHealthCheckTimer()
         if let process = process, process.isRunning {
             process.terminate()
             print("[MLXServer] Server stopped.")
@@ -64,21 +68,33 @@ final class MLXServerManager {
             }
         }
 
-        // Auto-restart on crash
+        // Auto-restart on crash with exponential backoff
         proc.terminationHandler = { [weak self] process in
             guard let self = self, self.isRunning else { return }
             let code = process.terminationStatus
             print("[MLXServer] Server exited with code \(code).")
 
+            // If the server was stable (up for 60+ seconds), reset the restart counter
+            if let launchTime = self.lastSuccessfulLaunchTime,
+               Date().timeIntervalSince(launchTime) >= Configuration.serverStableThreshold {
+                print("[MLXServer] Server was stable for \(Int(Date().timeIntervalSince(launchTime)))s — resetting restart counter.")
+                self.restartCount = 0
+            }
+
             if self.restartCount < Configuration.maxServerRestartAttempts {
                 self.restartCount += 1
-                print("[MLXServer] Restarting (attempt \(self.restartCount))...")
-                DispatchQueue.global().asyncAfter(deadline: .now() + Configuration.serverRestartDelay) {
+                let delays = Configuration.serverBackoffDelays
+                // Use the backoff array, clamping to the last value for indices beyond the array
+                let delayIndex = min(self.restartCount - 1, delays.count - 1)
+                let delay = delays[delayIndex]
+                print("[MLXServer] Restarting (attempt \(self.restartCount)/\(Configuration.maxServerRestartAttempts)) after \(Int(delay))s backoff...")
+                DispatchQueue.global().asyncAfter(deadline: .now() + delay) {
+                    guard self.isRunning else { return }
                     self.launchServer(serverDir: serverDir)
                     self.waitForServerReady()
                 }
             } else {
-                print("[MLXServer] Max restart attempts reached. Server will not restart.")
+                print("[MLXServer] Max restart attempts (\(Configuration.maxServerRestartAttempts)) reached. Server will not restart automatically. A periodic health check will continue to monitor.")
             }
         }
 
@@ -109,6 +125,7 @@ final class MLXServerManager {
             if ready {
                 print("[MLXServer] Server is ready — model loaded.")
                 restartCount = 0
+                lastSuccessfulLaunchTime = Date()
                 return
             }
 
@@ -145,6 +162,83 @@ final class MLXServerManager {
                 self.launchServer(serverDir: serverDir)
                 self.waitForServerReady()
             }
+        }
+    }
+
+    // MARK: - Periodic Health Check
+
+    /// Start a repeating timer that checks if the server is responsive.
+    /// If the process has died silently (or the health endpoint fails),
+    /// trigger a restart — even if the termination handler didn't fire.
+    private func startHealthCheckTimer() {
+        stopHealthCheckTimer()
+        let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global())
+        timer.schedule(
+            deadline: .now() + Configuration.serverPeriodicHealthCheckInterval,
+            repeating: Configuration.serverPeriodicHealthCheckInterval
+        )
+        timer.setEventHandler { [weak self] in
+            self?.performPeriodicHealthCheck()
+        }
+        timer.resume()
+        healthCheckTimer = timer
+    }
+
+    private func stopHealthCheckTimer() {
+        healthCheckTimer?.cancel()
+        healthCheckTimer = nil
+    }
+
+    private func performPeriodicHealthCheck() {
+        guard isRunning, let serverDir = serverDir else { return }
+
+        let semaphore = DispatchSemaphore(value: 0)
+        var healthy = false
+
+        Task {
+            healthy = await llmClient.readyCheck()
+            semaphore.signal()
+        }
+        semaphore.wait()
+
+        if healthy {
+            // Server is alive — if it has been stable long enough, reset counter
+            if let launchTime = lastSuccessfulLaunchTime,
+               Date().timeIntervalSince(launchTime) >= Configuration.serverStableThreshold,
+               restartCount > 0 {
+                print("[MLXServer] Health check passed — server stable for \(Int(Date().timeIntervalSince(launchTime)))s. Resetting restart counter.")
+                restartCount = 0
+            }
+            return
+        }
+
+        // Server is unresponsive — check if the process is still alive
+        let processAlive = process?.isRunning ?? false
+        print("[MLXServer] Health check FAILED (process alive: \(processAlive)). Attempting restart...")
+
+        // Kill the zombie process if it's still technically running
+        if processAlive {
+            stopProcess()
+        }
+
+        // Attempt restart (respecting the backoff/counter logic)
+        if restartCount < Configuration.maxServerRestartAttempts {
+            restartCount += 1
+            let delays = Configuration.serverBackoffDelays
+            let delayIndex = min(restartCount - 1, delays.count - 1)
+            let delay = delays[delayIndex]
+            print("[MLXServer] Health-check restart (attempt \(restartCount)/\(Configuration.maxServerRestartAttempts)) after \(Int(delay))s backoff...")
+            DispatchQueue.global().asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self = self, self.isRunning else { return }
+                self.launchServer(serverDir: serverDir)
+                self.waitForServerReady()
+            }
+        } else {
+            print("[MLXServer] Health check: max restart attempts (\(Configuration.maxServerRestartAttempts)) reached. Will keep checking periodically.")
+            // Reset counter so that the next health check failure can try again
+            // after the full backoff cycle. This prevents permanent death.
+            restartCount = 0
+            print("[MLXServer] Restart counter reset — will retry on next health check failure.")
         }
     }
 

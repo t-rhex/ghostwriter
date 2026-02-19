@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 /// Manages the lifecycle of the Python MLX server as a child process.
@@ -6,12 +7,13 @@ final class MLXServerManager {
     private var restartCount = 0
     private var isRunning = false
     private let llmClient = LLMClient()
+    private var serverDir: String?
 
     /// Start the Python MLX server.
     func start() {
         guard !isRunning else { return }
 
-        let serverDir = findServerDirectory()
+        serverDir = findServerDirectory()
         guard let serverDir = serverDir else {
             print("[MLXServer] Could not find Server directory.")
             return
@@ -19,6 +21,7 @@ final class MLXServerManager {
 
         launchServer(serverDir: serverDir)
         waitForServerReady()
+        observeSleepWake()
     }
 
     /// Stop the Python MLX server.
@@ -72,6 +75,7 @@ final class MLXServerManager {
                 print("[MLXServer] Restarting (attempt \(self.restartCount))...")
                 DispatchQueue.global().asyncAfter(deadline: .now() + Configuration.serverRestartDelay) {
                     self.launchServer(serverDir: serverDir)
+                    self.waitForServerReady()
                 }
             } else {
                 print("[MLXServer] Max restart attempts reached. Server will not restart.")
@@ -114,17 +118,54 @@ final class MLXServerManager {
         print("[MLXServer] Server did not become ready within timeout. Will continue — first request may be slow.")
     }
 
+    // MARK: - Sleep/Wake Handling
+
+    private func observeSleepWake() {
+        // Metal GPU state is invalidated on sleep/wake, causing MLX to crash.
+        // Proactively restart the server when the system wakes.
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(
+            forName: NSWorkspace.willSleepNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            print("[MLXServer] System going to sleep — stopping server.")
+            self?.stopProcess()
+        }
+        center.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            guard let self = self, self.isRunning, let serverDir = self.serverDir else { return }
+            print("[MLXServer] System woke — restarting server.")
+            self.restartCount = 0  // Reset since this is expected, not a crash
+            // Delay slightly to let GPU stabilize
+            DispatchQueue.global().asyncAfter(deadline: .now() + 3.0) {
+                self.launchServer(serverDir: serverDir)
+                self.waitForServerReady()
+            }
+        }
+    }
+
+    private func stopProcess() {
+        if let process = process, process.isRunning {
+            process.terminate()
+        }
+        process = nil
+    }
+
     private func findServerDirectory() -> String? {
         let execURL = URL(fileURLWithPath: CommandLine.arguments[0])
         let candidates = [
-            // Installed location
-            "/usr/local/share/ghostwriter/Server",
-            // Relative to executable (dev builds)
+            // Relative to executable (dev builds — checked first so local edits take precedence)
             execURL.deletingLastPathComponent().appendingPathComponent("../../../Server").path,
             execURL.deletingLastPathComponent().appendingPathComponent("../../Server").path,
             execURL.deletingLastPathComponent().appendingPathComponent("Server").path,
             // Relative to working directory
             FileManager.default.currentDirectoryPath + "/Server",
+            // Installed location (fallback)
+            "/usr/local/share/ghostwriter/Server",
         ]
 
         for candidate in candidates {

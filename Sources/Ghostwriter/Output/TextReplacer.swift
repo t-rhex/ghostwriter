@@ -100,38 +100,72 @@ final class TextReplacer {
 
     private func clipboardPaste(_ text: String) -> Bool {
         let pasteboard = NSPasteboard.general
+
+        // Save the current pasteboard contents so we can restore them later.
         let previousContents = pasteboard.string(forType: .string)
 
         pasteboard.clearContents()
-        pasteboard.setString(text, forType: .string)
-
-        // Select all (Cmd+A)
-        postKeyEvent(keyCode: 0, flags: .maskCommand)
-        usleep(50_000) // 50ms
-
-        // Paste (Cmd+V)
-        postKeyEvent(keyCode: 9, flags: .maskCommand)
-        usleep(50_000) // 50ms
-
-        // Restore previous clipboard
-        if let previous = previousContents {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-                pasteboard.clearContents()
-                pasteboard.setString(previous, forType: .string)
-            }
+        guard pasteboard.setString(text, forType: .string) else {
+            print("[TextReplacer] Clipboard paste: failed to write text to pasteboard.")
+            return false
         }
+
+        // Select all (Cmd+A) — keyCode 0 = 'a'
+        guard postKeyEvent(keyCode: 0, flags: .maskCommand) else {
+            print("[TextReplacer] Clipboard paste: failed to post Cmd+A.")
+            restorePasteboard(previous: previousContents)
+            return false
+        }
+        usleep(50_000) // 50ms
+
+        // Paste (Cmd+V) — keyCode 9 = 'v'
+        guard postKeyEvent(keyCode: 9, flags: .maskCommand) else {
+            print("[TextReplacer] Clipboard paste: failed to post Cmd+V.")
+            restorePasteboard(previous: previousContents)
+            return false
+        }
+        usleep(50_000) // 50ms
+
+        // Restore original pasteboard contents after 100ms delay
+        // to give the target app time to read the pasteboard.
+        restorePasteboard(previous: previousContents, delayMs: 100)
 
         return true
     }
 
-    private func postKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags) {
-        let source = CGEventSource(stateID: .hidSystemState)
-        if let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
-           let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false) {
-            keyDown.flags = flags
-            keyUp.flags = flags
-            keyDown.post(tap: .cghidEventTap)
-            keyUp.post(tap: .cghidEventTap)
+    /// Restore the pasteboard to its previous contents.
+    /// When `delayMs` is nil the restore happens synchronously on the current thread;
+    /// otherwise it is scheduled on the main queue after the given delay.
+    private func restorePasteboard(previous: String?, delayMs: Int? = nil) {
+        guard let previous = previous else { return }
+        let restore = {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(previous, forType: .string)
         }
+        if let ms = delayMs {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) {
+                restore()
+            }
+        } else {
+            restore()
+        }
+    }
+
+    /// Post a keyboard event (key down + key up) with the given flags.
+    /// Returns `true` if both events were created and posted successfully.
+    @discardableResult
+    private func postKeyEvent(keyCode: CGKeyCode, flags: CGEventFlags) -> Bool {
+        let source = CGEventSource(stateID: .hidSystemState)
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: false)
+        else {
+            return false
+        }
+        keyDown.flags = flags
+        keyUp.flags = flags
+        keyDown.post(tap: .cghidEventTap)
+        keyUp.post(tap: .cghidEventTap)
+        return true
     }
 }

@@ -18,7 +18,7 @@ logger = logging.getLogger("ghostwriter")
 # ---------------------------------------------------------------------------
 _model = None
 _tokenizer = None
-MODEL_NAME = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
+MODEL_NAME = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
 
 def get_model():

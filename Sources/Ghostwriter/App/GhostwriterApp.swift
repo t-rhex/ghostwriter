@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import Foundation
 
@@ -14,10 +15,13 @@ final class GhostwriterApp {
     private let ghostTextController = GhostTextController()
     private let undoManager = CorrectionUndoManager()
     private let serverManager = MLXServerManager()
+    private let correctionContext = CorrectionContext()
 
     // State
     private let processingQueue = DispatchQueue(label: "com.ghostwriter.processing")
     private var isProcessing = false
+    private var statusBar: StatusBarController?
+    private var isPaused = false
 
     init() {
         self.debouncer = TypingDebouncer()
@@ -33,12 +37,27 @@ final class GhostwriterApp {
         // Launch the Python MLX server
         serverManager.start()
 
+        // Set up the menubar status item (must be on main thread)
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let sb = StatusBarController()
+            sb.onToggle = { [weak self] in
+                self?.togglePause()
+            }
+            self.statusBar = sb
+        }
+
         // Set up debouncer callbacks
         debouncer.onShortPause = { [weak self] in
             self?.handleShortPause()
         }
         debouncer.onLongPause = { [weak self] in
             self?.handleLongPause()
+        }
+
+        // Wire up the global hotkey (Cmd+Shift+G) to toggle pause
+        keystrokeMonitor.onToggleHotkey = { [weak self] in
+            self?.togglePause()
         }
 
         // Start keystroke monitoring
@@ -90,6 +109,9 @@ final class GhostwriterApp {
             keystrokeBuffer.append(char)
         }
 
+        // Cancel any in-flight LLM request since user is still typing
+        llmClient.cancelCurrentRequest()
+
         // Reset debounce timers
         debouncer.keystrokeReceived()
     }
@@ -97,6 +119,7 @@ final class GhostwriterApp {
     // MARK: - Pause Handlers
 
     private func handleShortPause() {
+        guard !isPaused else { return }
         guard !isProcessing else { return }
         processingQueue.async { [weak self] in
             self?.performCorrection()
@@ -104,6 +127,7 @@ final class GhostwriterApp {
     }
 
     private func handleLongPause() {
+        guard !isPaused else { return }
         guard !isProcessing else { return }
         processingQueue.async { [weak self] in
             self?.performElaboration()
@@ -135,7 +159,19 @@ final class GhostwriterApp {
             return
         }
 
-        let text = PromptBuilder.extractRelevantText(fieldInfo.text)
+        // Skip search bars, URL bars, combo boxes, etc.
+        var axRole: CFTypeRef?
+        var axSubrole: CFTypeRef?
+        AXUIElementCopyAttributeValue(fieldInfo.element, kAXRoleAttribute as CFString, &axRole)
+        AXUIElementCopyAttributeValue(fieldInfo.element, kAXSubroleAttribute as CFString, &axSubrole)
+        if ToneProfile.shouldSkip(role: axRole as? String, subrole: axSubrole as? String) {
+            print("[Ghostwriter] Skipping — element role/subrole is in skip list.")
+            return
+        }
+
+        // Extract the paragraph near the cursor for focused correction
+        let cursorPos = fieldInfo.selectedRange?.location
+        let text = PromptBuilder.extractRelevantText(fieldInfo.text, cursorPosition: cursorPos != nil ? Int(cursorPos!) : nil)
 
         // Skip if too short
         guard text.count >= Configuration.minTextLengthForCorrection else { return }
@@ -152,14 +188,17 @@ final class GhostwriterApp {
             return
         }
 
-        // Call LLM
+        // Call LLM with style hints from recent corrections
         let semaphore = DispatchSemaphore(value: 0)
         var correctedText: String?
+        let styleHint = correctionContext.styleHint()
 
         Task {
             do {
-                let response = try await llmClient.correct(text: text, tone: tone)
+                let response = try await llmClient.correct(text: text, tone: tone, styleHint: styleHint)
                 correctedText = response.result
+            } catch let error as URLError where error.code == .cancelled {
+                print("[Ghostwriter] Correction cancelled — user is typing.")
             } catch {
                 print("[Ghostwriter] Correction failed: \(error)")
             }
@@ -194,6 +233,7 @@ final class GhostwriterApp {
                     let strategy = textReplacer.replaceFullText(in: currentField.element, with: newFull)
                     if let strategy = strategy {
                         undoManager.recordCorrection(original: currentText, corrected: newFull)
+                        correctionContext.record(original: text, corrected: corrected)
                         print("[Ghostwriter] Corrected (with appended text) via \(strategy): \"\(text.prefix(30))\" → \"\(corrected.prefix(30))\"")
                     }
                 } else {
@@ -207,6 +247,7 @@ final class GhostwriterApp {
         let strategy = textReplacer.replaceFullText(in: fieldInfo.element, with: corrected)
         if let strategy = strategy {
             undoManager.recordCorrection(original: text, corrected: corrected)
+            correctionContext.record(original: text, corrected: corrected)
             print("[Ghostwriter] Corrected via \(strategy): \"\(text.prefix(30))\" → \"\(corrected.prefix(30))\"")
         }
     }
@@ -224,7 +265,7 @@ final class GhostwriterApp {
 
         // Only elaborate short text
         guard text.count >= Configuration.minTextLengthForElaboration else { return }
-        guard text.count < 100 else { return } // Only elaborate short fragments
+        guard text.count < 300 else { return } // Elaborate short-to-medium fragments
 
         let bundleID = appDetector.frontmostAppBundleID()
         let tone = ToneProfile.tone(for: bundleID)
@@ -239,6 +280,8 @@ final class GhostwriterApp {
             do {
                 let response = try await llmClient.elaborate(text: text, tone: tone)
                 elaboratedText = response.result
+            } catch let error as URLError where error.code == .cancelled {
+                print("[Ghostwriter] Elaboration cancelled — user is typing.")
             } catch {
                 print("[Ghostwriter] Elaboration failed: \(error)")
             }
@@ -272,6 +315,19 @@ final class GhostwriterApp {
         keystrokeBuffer.clear()
         debouncer.cancelTimers()
         print("[Ghostwriter] Undo detected — cleared state.")
+    }
+
+    // MARK: - Toggle Pause
+
+    private func togglePause() {
+        isPaused.toggle()
+        statusBar?.isPaused = isPaused
+        if isPaused {
+            debouncer.cancelTimers()
+            print("[Ghostwriter] Paused — corrections and elaborations disabled.")
+        } else {
+            print("[Ghostwriter] Resumed — corrections and elaborations enabled.")
+        }
     }
 
     // MARK: - Helpers

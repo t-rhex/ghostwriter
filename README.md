@@ -36,14 +36,14 @@ Everything runs locally. No data leaves your machine.
   | Terminal, Xcode, VS Code | Technical | Skipped (no corrections) |
   | Everything else | Neutral | Standard English |
 - **Safe** — skips password fields, rejects rewrites >30% different, prevents correction loops
-- **Local** — runs Meta Llama 3.1 8B (4-bit) via Apple MLX on your Mac's GPU
+- **Local** — runs Llama 3.2 3B (4-bit) via Apple MLX on your Mac's GPU
 
 ## Requirements
 
 - macOS 13+ (Ventura or later)
 - Apple Silicon Mac (M1/M2/M3/M4)
 - Python 3.9+
-- ~6 GB RAM for the 8B model
+- ~4 GB RAM for the 3B model
 
 ## Quick Start
 

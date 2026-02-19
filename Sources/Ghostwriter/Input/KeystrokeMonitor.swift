@@ -11,6 +11,9 @@ final class KeystrokeMonitor {
     private var runLoopSource: CFRunLoopSource?
     private var callback: KeystrokeCallback?
 
+    /// Called when the global hotkey Cmd+Shift+G is pressed.
+    var onToggleHotkey: (() -> Void)?
+
     /// Start monitoring keystrokes. Must be called on the main thread.
     func start(callback: @escaping KeystrokeCallback) {
         self.callback = callback
@@ -82,6 +85,17 @@ final class KeystrokeMonitor {
         if type == .keyDown {
             let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
             let flags = event.flags
+
+            // Detect Cmd+Shift+G (keyCode 5) for global toggle hotkey
+            if keyCode == 5
+                && flags.contains(.maskCommand)
+                && flags.contains(.maskShift) {
+                DispatchQueue.main.async {
+                    monitor.onToggleHotkey?()
+                }
+                return Unmanaged.passRetained(event)
+            }
+
             let chars = keyStringFromEvent(event)
             monitor.callback?(chars, keyCode, flags)
         }

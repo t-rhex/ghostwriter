@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 // Ensure stdout flushes immediately (needed when not attached to a terminal)
@@ -30,6 +31,10 @@ while !Permissions.checkAccessibility(prompt: false) || !Permissions.checkInputM
 
 print("[Ghostwriter] All permissions granted.")
 
+// Set up NSApplication for menubar support (must happen before creating status items)
+let nsApp = NSApplication.shared
+nsApp.setActivationPolicy(.accessory)  // Don't show in Dock
+
 // Create and start the app
 let app = GhostwriterApp()
 
@@ -45,5 +50,7 @@ signal(SIGTERM) { _ in
 
 app.start()
 
-// Run the main run loop (required for CGEventTap to work)
-CFRunLoopRun()
+// Run the NSApplication run loop (replaces CFRunLoopRun).
+// NSApplication.shared.run() drives the main CFRunLoop internally,
+// so CGEventTap continues to work. NSStatusBar requires this.
+nsApp.run()

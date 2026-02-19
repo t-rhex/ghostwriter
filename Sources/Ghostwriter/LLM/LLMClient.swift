@@ -1,9 +1,18 @@
 import Foundation
 
 /// HTTP client for communicating with the Python MLX server.
+/// Supports request cancellation — when the user types during an in-flight
+/// LLM request, callers should invoke `cancelCurrentRequest()` so the
+/// previous request is torn down immediately.
 final class LLMClient {
     private let baseURL: String
     private let session: URLSession
+
+    /// The in-flight data task for correct/elaborate requests.
+    private var currentTask: URLSessionDataTask?
+
+    /// Protects `currentTask` from concurrent access.
+    private let lock = NSLock()
 
     init(baseURL: String = Configuration.llmBaseURL) {
         self.baseURL = baseURL
@@ -13,17 +22,31 @@ final class LLMClient {
         self.session = URLSession(configuration: config)
     }
 
+    // MARK: - Cancellation
+
+    /// Cancel the currently in-flight correct/elaborate request, if any.
+    /// Safe to call from any thread.
+    func cancelCurrentRequest() {
+        lock.lock()
+        let task = currentTask
+        currentTask = nil
+        lock.unlock()
+        task?.cancel()
+    }
+
     // MARK: - Public API
 
     /// Send a correction request and return the corrected text.
-    func correct(text: String, tone: Tone) async throws -> LLMResponse {
-        guard let body = PromptBuilder.correctionPayload(text: text, tone: tone) else {
+    /// Any previously in-flight request is cancelled automatically.
+    func correct(text: String, tone: Tone, styleHint: String? = nil) async throws -> LLMResponse {
+        guard let body = PromptBuilder.correctionPayload(text: text, tone: tone, styleHint: styleHint) else {
             throw LLMClientError.invalidPayload
         }
         return try await post(endpoint: "/v1/correct", body: body)
     }
 
     /// Send an elaboration request and return the elaborated text.
+    /// Any previously in-flight request is cancelled automatically.
     func elaborate(text: String, tone: Tone) async throws -> LLMResponse {
         guard let body = PromptBuilder.elaborationPayload(text: text, tone: tone) else {
             throw LLMClientError.invalidPayload
@@ -60,12 +83,57 @@ final class LLMClient {
             throw LLMClientError.invalidURL
         }
 
+        // Cancel any previously in-flight request before starting a new one.
+        cancelCurrentRequest()
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
 
-        let (data, response) = try await session.data(for: request)
+        // Create a URLSessionDataTask so we can cancel it later.
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await withCheckedThrowingContinuation { continuation in
+                let task = self.session.dataTask(with: request) { data, response, error in
+                    if let error = error {
+                        continuation.resume(throwing: error)
+                    } else if let data = data, let response = response {
+                        continuation.resume(returning: (data, response))
+                    } else {
+                        continuation.resume(throwing: LLMClientError.invalidResponse)
+                    }
+                }
+
+                // Store the task for possible cancellation.
+                self.lock.lock()
+                self.currentTask = task
+                self.lock.unlock()
+
+                task.resume()
+            }
+        } catch {
+            // Clear the current task reference on failure.
+            lock.lock()
+            currentTask = nil
+            lock.unlock()
+
+            // Rethrow cancellation as URLError(.cancelled) for callers.
+            if (error as? URLError)?.code == .cancelled {
+                throw URLError(.cancelled)
+            }
+            if (error as NSError).domain == NSURLErrorDomain,
+               (error as NSError).code == NSURLErrorCancelled {
+                throw URLError(.cancelled)
+            }
+            throw error
+        }
+
+        // Request finished — clear the tracked task.
+        lock.lock()
+        currentTask = nil
+        lock.unlock()
 
         guard let httpResponse = response as? HTTPURLResponse else {
             throw LLMClientError.invalidResponse

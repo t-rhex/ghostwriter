@@ -2,7 +2,7 @@ import Foundation
 
 enum Configuration {
     // MARK: - Debouncing
-    static let shortPauseInterval: TimeInterval = 1.5   // 1.5s → trigger correction (tuned for 8B model latency)
+    static let shortPauseInterval: TimeInterval = 1.0   // 1.0s → trigger correction (tuned for 3B model latency)
     static let longPauseInterval: TimeInterval = 2.0     // 2s → trigger elaboration
 
     // MARK: - LLM Server
@@ -17,7 +17,7 @@ enum Configuration {
     static let minTextLengthForElaboration = 5
 
     // MARK: - Model
-    static let modelName = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
+    static let modelName = "mlx-community/Llama-3.2-3B-Instruct-4bit"
 
     // MARK: - Server Management
     static let serverStartupTimeout: TimeInterval = 30.0   // For uvicorn process to start

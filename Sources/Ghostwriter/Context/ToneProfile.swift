@@ -54,4 +54,39 @@ enum ToneProfile {
         guard let bundleID = bundleID else { return .neutral }
         return appToneMap[bundleID] ?? .neutral
     }
+
+    // MARK: - Per-App Correction Skip Rules
+
+    /// AX roles and subroles whose elements should never be corrected.
+    /// These represent UI elements where spell-correction is inappropriate
+    /// (search bars, dropdowns, URL bars, password fields).
+    static let skippedRoles: Set<String> = [
+        "AXSearchField",       // Search bars — user expects literal input
+        "AXComboBox",          // Dropdowns — values are predefined, not prose
+        "AXSecureTextField",   // Password fields — must never be altered
+    ]
+
+    /// AX subroles whose elements should never be corrected.
+    static let skippedSubroles: Set<String> = [
+        "AXURLTextField",      // URL bars — addresses, not prose
+        "AXSearchField",       // Some apps expose search as a subrole
+        "AXSecureTextField",   // Password fields via subrole
+    ]
+
+    /// Determine whether a given element should be skipped for correction
+    /// based on its AX role and subrole.
+    ///
+    /// - Parameters:
+    ///   - role: The AXRole of the focused element (e.g. "AXTextField", "AXSearchField").
+    ///   - subrole: The AXSubrole of the focused element (e.g. "AXURLTextField"), or nil.
+    /// - Returns: `true` if correction should be skipped for this element.
+    static func shouldSkip(role: String?, subrole: String?) -> Bool {
+        if let role = role, skippedRoles.contains(role) {
+            return true
+        }
+        if let subrole = subrole, skippedSubroles.contains(subrole) {
+            return true
+        }
+        return false
+    }
 }
